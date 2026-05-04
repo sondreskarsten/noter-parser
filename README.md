@@ -105,7 +105,78 @@ Not yet tested at population scale (~12,860 orgnrs). Failure modes will be disco
 - Every parser fix should generalize across the population. Per-orgnr overrides are an anti-pattern — if you need one, the parser is wrong.
 - Visual inspection of every page is part of debugging, not a fallback.
 
+## Schema-mapping cascade (NEW)
+
+The parser now has a 3-tier fallback cascade for handling label variance across the SME population:
+
+```
+   raw_amounts key
+        ↓
+   Tier 0: deterministic regex (matchers.get_amount)
+        ↓ miss
+   Tier 1: rapidfuzz WRatio ≥ 95   (lexical near-match)
+        ↓ miss
+   Tier 2: BGE-M3 embedding ≥ 0.78 (semantic similarity)
+        ↓ miss
+   Tier 3: LLM router               (Claude Haiku 4.5, optional)
+        ↓ miss
+   None  →  noter-text-extraction reprocess via Claude vision
+```
+
+Tier 1+2 are implemented in `schema_mapper.py` and target a fixed canonical schema in `canonical_schema.py`. Each canonical field has a list of observed Norwegian synonyms ("Aksjekapital", "Aksje-kapital", "Innskutt aksjekapital" → all → `aksjekapital`).
+
+Tier 3 (`llm_router.py`) is a stub that uses the Anthropic API with constrained Literal output — the model can only pick from the list of canonical fields, never invent new ones. It's only invoked when Tier 2 cosine similarity is < 0.82 OR the top-1/top-2 margin is < 0.05.
+
+To enable Tier 1 only:
+```bash
+pip install rapidfuzz
+```
+
+To enable Tier 2 (semantic):
+```bash
+pip install sentence-transformers torch
+```
+
+To enable Tier 3 (LLM router):
+```bash
+pip install anthropic
+export ANTHROPIC_API_KEY=...
+```
+
+Tier 1 is on by default. Tier 2 is lazy-loaded on first call. Tier 3 is opt-in (only invoked when caller explicitly calls `llm_router.confident_route`).
+
+## Validators (Pandera-style identity checks)
+
+After parsing, `validators.py` runs financial identity checks:
+
+- `egenkapital_summary`: aksjekap + innskutt + opptjent ≈ sum_egenkapital
+- `lonn_ytelser`: lønn + AGA + pensjon + andre ≈ sum_lønnskostnader
+- `skatt_aaret`: betalbar + endring_utsatt ≈ skattekostnad_total
+- `anleggsmidler_rollforward`: anskaffelse - akk_avskrivninger ≈ balanseført
+
+Tolerance: 0.1% relative or 1 NOK absolute (rounding-grade).
+
+```python
+from noter_parser import parse_orgnr_with_validation
+res = parse_orgnr_with_validation(loader, "989100106", [2024])
+print(res["validation"]["egenkapital_summary"]["pass_rate"])  # 1.0 if all rows balance
+```
+
+Failed identities don't crash the pipeline — they're emitted to a review queue. A failed roll-forward is high-confidence evidence of an extraction error.
+
+## Source priority
+
+`load_noter_json` reads from these prefixes in priority order:
+
+1. `noter_v5b` — Gemini-extracted (canonical for orgnrs already processed)
+2. `tesseract_v1` — output of [noter-text-extraction](https://github.com/sondreskarsten/noter-text-extraction) (deterministic OCR pipeline)
+3. `claude_visual_v1` — interactive Claude vision (used for failures)
+4. `manual_claude_v1` — hand-transcribed (last resort)
+
+The parser doesn't care which source it reads from; the JSON schema is identical. This means you can swap text-extraction backends per-firm without changing parser code.
+
 ## Related repos
 
-- [extraction-prompts](https://github.com/sondreskarsten/extraction-prompts) — the Gemini prompt and Cloud Run extraction job
+- [noter-text-extraction](https://github.com/sondreskarsten/noter-text-extraction) — deterministic PDF → JSON OCR pipeline (replaces Gemini)
+- [extraction-prompts](https://github.com/sondreskarsten/extraction-prompts) — original Gemini prompt
 - [tidybrreg](https://github.com/sondreskarsten/tidybrreg) — R package for Brreg API access
