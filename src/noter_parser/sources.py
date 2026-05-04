@@ -74,3 +74,13 @@ def download_pdf(orgnr: str, year: int, dest: Optional[str] = None) -> str:
     bkt = gcs_client().bucket(PDF_BUCKET)
     bkt.blob(f"{PDF_PREFIX}/{orgnr}/aarsregnskap_{year}.pdf").download_to_filename(dest)
     return dest
+
+
+def load_regnskapsapi_validation(orgnr: str, year: int) -> Optional[dict]:
+    """Load flattened regnskapsapi primary statement for cross-validation.
+    Returns None if not yet fetched. NOT a noter source — primary statements only."""
+    bkt = gcs_client().bucket(DATA_BUCKET)
+    blob = bkt.blob(f"regnskapsapi/validation/{orgnr}_{year}.json")
+    if blob.exists():
+        return json.loads(blob.download_as_text())
+    return None

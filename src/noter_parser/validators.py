@@ -205,3 +205,48 @@ def validate_table(table: str, rows: list[dict]) -> dict:
         "pass_rate": n_passed / n_validated if n_validated else None,
         "rows": results,
     }
+
+
+def run_validators(tables: dict[str, list[dict]]) -> dict:
+    """Run all table validators. Convenience wrapper for stress test."""
+    return {table: validate_table(table, rows) for table, rows in tables.items()}
+
+
+def cross_validate_regnskapsapi(tables: dict[str, list[dict]],
+                                 api_data: dict) -> list[IdentityResult]:
+    """Cross-check noter-extracted values against regnskapsregister-api totals.
+
+    api_data: flattened dict from regnskapsapi/validation/{orgnr}_{year}.json
+    Returns list of IdentityResult for each check performed."""
+    out = []
+
+    api_ek = api_data.get("sum_egenkapital")
+    if api_ek is not None:
+        for row in tables.get("egenkapital_summary", []):
+            noter_val = row.get("sum_egenkapital")
+            if isinstance(noter_val, (int, float)) and not _isnan(noter_val):
+                passed = _close_enough(float(noter_val), float(api_ek), rel_tol=0.01)
+                out.append(IdentityResult(
+                    name="api_cross_sum_egenkapital",
+                    passed=passed,
+                    expected=float(api_ek),
+                    actual=float(noter_val),
+                    diff=float(noter_val) - float(api_ek) if not passed else None,
+                    note="Noter sum_egenkapital vs regnskapsapi (1% tol)",
+                ))
+                break
+
+    api_eiendeler = api_data.get("sum_eiendeler")
+    if api_eiendeler is not None:
+        api_balance = api_data.get("sum_egenkapital_gjeld")
+        if api_balance is not None:
+            passed = _close_enough(float(api_eiendeler), float(api_balance))
+            out.append(IdentityResult(
+                name="api_balance_sheet_identity",
+                passed=passed,
+                expected=float(api_eiendeler),
+                actual=float(api_balance),
+                note="API internal: sum_eiendeler == sum_egenkapital_gjeld",
+            ))
+
+    return out
