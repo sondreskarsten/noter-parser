@@ -1,0 +1,23 @@
+[project]
+name = "noter-parser"
+version = "0.1.0"
+description = "Deterministic parser for Norwegian årsregnskap notes"
+requires-python = ">=3.10"
+dependencies = [
+    "google-cloud-storage>=2.0",
+]
+
+[project.optional-dependencies]
+audit = [
+    "pdf2image>=1.16",
+]
+test = [
+    "pytest>=7.0",
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
