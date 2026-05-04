@@ -4,6 +4,7 @@ from .audit import audit, render_all_pages
 from .sources import (
     load_noter_json, list_years_for_orgnr, list_pdf_years_for_orgnr, download_pdf,
 )
+from . import canonical_schema, schema_mapper, validators
 
 __all__ = [
     "parse_one", "parse_orgnr_years",
@@ -11,4 +12,5 @@ __all__ = [
     "audit", "render_all_pages",
     "load_noter_json", "list_years_for_orgnr",
     "list_pdf_years_for_orgnr", "download_pdf",
+    "canonical_schema", "schema_mapper", "validators",
 ]

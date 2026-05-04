@@ -1,49 +1,52 @@
-from ..matchers import get_note, get_amount
+from ..matchers import get_note, get_amount, get_amount_with_fallback
+
+
+def _match_field(note, year, field_alts: list[str], table=None, canonical_field=None):
+    """Find a value matching '<field> at end-of-year' across any of:
+      - 'Egenkapital 31.12.YYYY ... <field>'
+      - 'Pr. 31.12.YYYY <field>'
+      - '<field> Pr. 31.12.YYYY' (reversed)
+      - '<field> 31.12.YYYY'
+      - 'Egenkapital pr. 31.12. <field>' (no year, period style — closing)
+      - 'Egenkapital 31.12. <field>'
+
+    With schema_mapper fallback if regex misses and canonical_field given.
+    """
+    yr2, yr4 = str(year)[-2:], str(year)
+    field_pat = "(?:" + "|".join(field_alts) + ")"
+    candidates = [
+        rf"31\.12\.{yr4}.*{field_pat}",
+        rf"31\.12\.{yr2}.*{field_pat}",
+        rf"{field_pat}.*31\.12\.{yr4}",
+        rf"{field_pat}.*31\.12\.{yr2}",
+        rf"31\.12\..*{field_pat}",
+    ]
+    return get_amount_with_fallback(
+        note, *candidates,
+        table=table, field=canonical_field, year=year,
+    )
 
 
 def build(data: dict, orgnr: str, year: int) -> list[dict]:
     note = get_note(data, r"^egenkapital$")
     if not note:
         return []
-    yr2 = str(year)[-2:]
-    yr4 = str(year)
-    sum_ek = (
-        get_amount(
-            note,
-            rf"31\.12\.{yr4}.*SUM",
-            rf"31\.12\.{yr2}.*SUM",
-            rf"31\.12\.{yr4}.*Sum",
-            rf"31\.12\.{yr2}.*Sum",
-        )
-        or get_amount(
-            note,
-            rf"Egenkapital 31\.12\.{yr2}.*Sum",
-            rf"Egenkapital pr\.? 31\.12\.{yr2}.*Sum",
-            rf"Egenkapital 31\.12\.{yr4}.*Sum",
-            rf"EK pr\.? 31\.12\.{yr4}.*Sum",
-        )
-    )
-    aksjekap = get_amount(
-        note,
-        rf"31\.12\.{yr4}.*Aksjekapital",
-        rf"31\.12\.{yr2}.*Aksjekapital",
-        rf"31\.12\.{yr4}.*Aksje-?\s*kapital",
-        rf"31\.12\.{yr2}.*Aksje-?\s*kapital",
-    )
-    innskutt = get_amount(
-        note,
-        rf"31\.12\.{yr4}.*Annen innskutt",
-        rf"31\.12\.{yr2}.*Annen innskutt",
-    )
-    opptjent = get_amount(
-        note,
-        rf"31\.12\.{yr4}.*Annen opptjent",
-        rf"31\.12\.{yr2}.*Annen opptjent",
-        rf"31\.12\.{yr4}.*Annen egen-?\s*kapital",
-        rf"31\.12\.{yr2}.*Annen egen-?\s*kapital",
-        rf"31\.12\.{yr4}.*Annen egenkapital",
-        rf"31\.12\.{yr2}.*Annen egenkapital",
-    )
+    sum_ek = _match_field(note, year, [
+        r"Sum egenkapital", r"^SUM$", r"Sum$",
+    ], table="egenkapital_summary", canonical_field="sum_egenkapital")
+    aksjekap = _match_field(note, year, [
+        r"Aksjekapital", r"Aksje-?\s*kapital",
+    ], table="egenkapital_summary", canonical_field="aksjekapital")
+    innskutt = _match_field(note, year, [
+        r"Annen innskutt", r"Overkurs",
+    ], table="egenkapital_summary", canonical_field="annen_innskutt_ek")
+    opptjent = _match_field(note, year, [
+        r"Annen opptjent",
+        r"Annen egen-?\s*kapital",
+        r"Annen egenkapital",
+        r"Opptjent egenkapital",
+        r"Annen EK",
+    ], table="egenkapital_summary", canonical_field="annen_opptjent_ek")
     kbidrag_mottatt = get_amount(
         note,
         r"[Mm]ottatt konsernbidrag.*SUM",
@@ -57,6 +60,7 @@ def build(data: dict, orgnr: str, year: int) -> list[dict]:
         r"Avsatt konsernbidrag",
         r"[Kk]onsernbidrag avgitt",
         r"[Kk]onsernbidrag avsatt",
+        r"^- Avgitt konsernbidrag$",
     )
     if sum_ek is None and aksjekap is None:
         return []

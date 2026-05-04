@@ -73,6 +73,10 @@ def build(data: dict, orgnr: str, year: int) -> list[dict]:
         r"konserninterne forhold",
         r"transaksjoner og mellomværende",
         r"nærstående part",
+        r"konsern,? tilknyttet selskap",
+        r"mellomværende.*konsern",
+        r"mellomværende.*nærstående",
+        r"^konsernregnskap$",
     )
     if note_kt:
         for k, v in note_kt.get("raw_amounts", {}).items():
@@ -109,6 +113,9 @@ def build(data: dict, orgnr: str, year: int) -> list[dict]:
                 direction = "konsernbidrag_paid"
             elif "leverandørgjeld" in kl and "konsern" in kl:
                 direction = "intercompany_payable_short"
+            elif re.search(rf"\b(?:pr\.?|per)\s+3?1\.12\.{year}\b", k, re.IGNORECASE):
+                # SME pattern: '<Party> PR 31.12.YEAR' = intercompany balance
+                direction = "intercompany_balance"
             else:
                 continue
             party_match = re.search(
@@ -118,7 +125,15 @@ def build(data: dict, orgnr: str, year: int) -> list[dict]:
                 r"Øvrige FMC[\w\s-]*)",
                 k,
             )
-            party = party_match.group(1).strip() if party_match else "Unknown"
+            if party_match:
+                party = party_match.group(1).strip()
+            else:
+                # Generic SME pattern: 'NAME PR DATE' or 'NAME 31.12.YEAR'
+                generic = re.match(
+                    r"^([A-ZÆØÅ][^\d]{2,60}?)(?:\s+(?:PR\.?|per|pr\.))?\s+3?1\.12\.\d{2,4}",
+                    k,
+                )
+                party = generic.group(1).strip() if generic else "Unknown"
             rows.append({
                 "orgnr": orgnr,
                 "report_year": year,

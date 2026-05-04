@@ -81,6 +81,40 @@ def _from_text(text: str) -> Optional[str]:
     return None
 
 
+def _all_shareholders(note: Optional[dict]) -> list[tuple[str, dict]]:
+    """Return a list of (name, fields) for every shareholder mentioned in
+    compound `raw_amounts` keys. fields is a dict that may include
+    'antall_aksjer', 'eierandel_pct', 'palydende', 'bokfort_verdi'."""
+    if not note:
+        return []
+    by_name: dict[str, dict] = {}
+    for k, v in note.get("raw_amounts", {}).items():
+        for suf in _KEY_SUFFIXES:
+            if k.endswith(" " + suf):
+                name = k[: -(len(suf) + 1)].strip()
+                low = name.lower()
+                # Skip column-header / total rows
+                if not name:
+                    break
+                if low.startswith(("ordinære", "sum", "antall", "totalt antall")):
+                    break
+                # Strip embedded "Ordinære aksjer" infix from compound keys like
+                # "Aldina Maksumic-M Ordinære aksjer Eierandel"
+                name = re.sub(r"\s+Ordinære aksjer$", "", name).strip()
+                fields = by_name.setdefault(name, {})
+                low_suf = suf.lower()
+                if low_suf in ("antall", "antall aksjer"):
+                    fields["antall_aksjer"] = v
+                elif "eier" in low_suf:
+                    fields["eierandel_pct"] = v
+                elif low_suf == "pålydende":
+                    fields["palydende"] = v
+                elif low_suf == "bokført":
+                    fields["bokfort_verdi"] = v
+                break
+    return list(by_name.items())
+
+
 def parse_aksjonaer(note: Optional[dict]) -> Optional[str]:
     if not note:
         return None
@@ -88,25 +122,52 @@ def parse_aksjonaer(note: Optional[dict]) -> Optional[str]:
 
 
 def build(data: dict, orgnr: str, year: int) -> list[dict]:
-    note = get_note(data, r"aksjekapital.*aksjonær", r"aksjekapital og aksjon")
+    note = get_note(
+        data,
+        r"aksjekapital.*aksjonær",
+        r"aksjekapital og aksjon",
+        r"^aksjonærer$",
+        r"^aksjekapital$",
+    )
     if not note:
         return []
-    name = parse_aksjonaer(note)
-    # Antall aksjer comes from the same compound key that gave us the name
-    antall = None
-    if name:
-        for k, v in note.get("raw_amounts", {}).items():
-            if k.startswith(name + " ") and ("aksjer" in k.lower() or k.endswith(" Antall")):
-                antall = v
-                break
-    return [{
-        "orgnr": orgnr,
-        "report_year": year,
-        "source_filing_year": year,
-        "aksjonaer_idx": 1,
-        "navn": name or "UNKNOWN",
-        "antall_aksjer": antall,
-        "eierandel_pct": 100.0,
-        "verv": None,
-        "eid_av_person": False,
-    }]
+    shareholders = _all_shareholders(note)
+    if not shareholders:
+        # Single-parent fallback via text parser (older filings, EPAX-style)
+        name = parse_aksjonaer(note)
+        if not name:
+            return []
+        return [{
+            "orgnr": orgnr,
+            "report_year": year,
+            "source_filing_year": year,
+            "aksjonaer_idx": 1,
+            "navn": name,
+            "antall_aksjer": None,
+            "eierandel_pct": None,
+            "verv": None,
+            "eid_av_person": False,
+        }]
+    rows = []
+    for idx, (name, fields) in enumerate(shareholders, start=1):
+        rows.append({
+            "orgnr": orgnr,
+            "report_year": year,
+            "source_filing_year": year,
+            "aksjonaer_idx": idx,
+            "navn": name,
+            "antall_aksjer": fields.get("antall_aksjer"),
+            "eierandel_pct": fields.get("eierandel_pct"),
+            "verv": None,
+            "eid_av_person": _looks_like_person(name),
+        })
+    return rows
+
+
+def _looks_like_person(name: str) -> bool:
+    """Heuristic: comma-separated 'Lastname, Firstname' or no AS/Holding suffix."""
+    if "," in name:
+        return True
+    if not re.search(r"\b(AS|ASA|Inc|Ltd|LLC|GmbH|Holding|Foundation|Stiftelse|Sparebank)\b", name):
+        return True
+    return False

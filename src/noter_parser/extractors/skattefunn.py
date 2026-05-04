@@ -1,5 +1,5 @@
 import re
-from ..matchers import get_note, get_amount
+from ..matchers import get_note, get_amount, get_amount_with_fallback
 
 
 def build(data: dict, orgnr: str, year: int) -> list[dict]:
@@ -11,6 +11,11 @@ def build(data: dict, orgnr: str, year: int) -> list[dict]:
             rf"[Ff]ordring [Ss]katte[Ff][Uu][Nn][Nn].*{year}",
             r"[Ff]ordring [Ss]katte[Ff][Uu][Nn][Nn]",
         )
+        if amt is None:
+            amt = get_amount_with_fallback(
+                note_afk, table="skattefunn",
+                field="forventet_tilskudd_nok", year=year,
+            )
     if amt is None:
         note_sf = get_note(data, r"^skattefunn$", r"skatte\s*funn")
         if note_sf:
@@ -20,6 +25,11 @@ def build(data: dict, orgnr: str, year: int) -> list[dict]:
                 r"[Ff]orventet.*tilskudd",
                 r"[Tt]ilskudd",
             )
+            if amt is None:
+                amt = get_amount_with_fallback(
+                    note_sf, table="skattefunn",
+                    field="forventet_tilskudd_nok", year=year,
+                )
             if amt is None:
                 text = note_sf.get("raw_text", "") or ""
                 m = re.search(r"NOK\s+([\d\s]{4,})", text)

@@ -20,17 +20,23 @@ def gcs_client():
 
 
 def load_noter_json(orgnr: str, year: int) -> tuple[Optional[dict], Optional[str]]:
-    """Load Gemini-extracted noter JSON for one (orgnr, year). Falls back to
-    manual visual extraction if the v5b path is missing."""
+    """Load extracted noter JSON for one (orgnr, year). Source priority:
+      1. noter_v5b (Gemini)
+      2. tesseract_v1 (this repo's deterministic OCR pipeline)
+      3. claude_visual_v1 (interactive Claude vision)
+      4. manual_claude_v1 (hand-transcribed)
+    """
     bkt = gcs_client().bucket(DATA_BUCKET)
-    primary = f"{NOTER_V5B_PREFIX}/{orgnr}_{year}.json"
-    fallback = f"{MANUAL_VISUAL_PREFIX}/{orgnr}_{year}.json"
-    blob = bkt.blob(primary)
-    if blob.exists():
-        return json.loads(blob.download_as_text()), "noter_v5b"
-    blob = bkt.blob(fallback)
-    if blob.exists():
-        return json.loads(blob.download_as_text()), "manual_claude_v1"
+    sources = [
+        (NOTER_V5B_PREFIX, "noter_v5b"),
+        ("raw/noter_extraction_2025/extractions/tesseract_v1", "tesseract_v1"),
+        ("raw/noter_extraction_2025/extractions/claude_visual_v1", "claude_visual_v1"),
+        (MANUAL_VISUAL_PREFIX, "manual_claude_v1"),
+    ]
+    for prefix, label in sources:
+        blob = bkt.blob(f"{prefix}/{orgnr}_{year}.json")
+        if blob.exists():
+            return json.loads(blob.download_as_text()), label
     return None, None
 
 

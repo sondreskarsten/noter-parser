@@ -1,5 +1,5 @@
 import re
-from ..matchers import get_note, get_amount
+from ..matchers import get_note, get_amount, get_amount_with_fallback
 
 
 def _from_text(text: str) -> int | None:
@@ -20,7 +20,12 @@ def _from_text(text: str) -> int | None:
 
 
 def build(data: dict, orgnr: str, year: int) -> list[dict]:
-    note = get_note(data, r"^bankinnskudd$")
+    note = get_note(
+        data,
+        r"^bankinnskudd$",
+        r"bankinnskudd.*kontanter",
+        r"^bankinnskudd,? kontanter",
+    )
     if not note:
         return []
     amt = get_amount(
@@ -30,6 +35,11 @@ def build(data: dict, orgnr: str, year: int) -> list[dict]:
         r"[Ss]kattetrekksmidler",
         r"[Bb]undne midler",
     )
+    if amt is None:
+        amt = get_amount_with_fallback(
+            note, table="bankinnskudd_bundne",
+            field="bundne_skattetrekksmidler", year=year,
+        )
     if amt is None:
         amt = _from_text(note.get("raw_text", "") or "")
     if amt is None:
